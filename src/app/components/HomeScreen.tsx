@@ -2,10 +2,10 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Play, Plus, Search, Trash2, ChevronLeft, ChevronRight, Activity } from 'lucide-react';
 import { Match } from '../types';
-import { mockMatches } from '../mockData';
+import { useApp } from '../context/AppContext';
 
 export function HomeScreen() {
-  const [matches] = useState<Match[]>(mockMatches);
+  const { matches } = useApp();
   const [currentIndex, setCurrentIndex] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
   const navigate = useNavigate();

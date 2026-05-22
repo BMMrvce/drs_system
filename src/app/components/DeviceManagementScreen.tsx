@@ -2,18 +2,32 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Plus, Wifi, WifiOff, Battery, Radio, Settings, Trash2, RefreshCw } from 'lucide-react';
 import { Device } from '../types';
-import { mockDevices } from '../mockData';
+import { useApp } from '../context/AppContext';
 
 export function DeviceManagementScreen() {
   const navigate = useNavigate();
-  const [devices, setDevices] = useState<Device[]>(mockDevices);
+  const { devices, startDiscovery, stopDiscovery, brokerStatus, brokerUrl, brokerError } = useApp();
   const [scanning, setScanning] = useState(false);
+  const [broker, setBroker] = useState('');
+  const [port, setPort] = useState(1883);
+  const [username, setUsername] = useState('');
+  const [discoveryTimeout, setDiscoveryTimeout] = useState(5000);
 
   const handleScan = () => {
     setScanning(true);
+    try {
+      const url = broker || `ws://localhost:${port}`;
+      startDiscovery(url, { username });
+    } catch (e) {
+      console.error(e);
+    }
     setTimeout(() => {
       setScanning(false);
     }, 2000);
+  };
+
+  const handleDisconnect = () => {
+    stopDiscovery();
   };
 
   const getDeviceIcon = (type: string) => {
@@ -48,7 +62,7 @@ export function DeviceManagementScreen() {
         </div>
 
         {/* Actions Bar */}
-        <div className="flex gap-4 mb-8">
+          <div className="flex gap-4 mb-8 items-center">
           <button
             onClick={handleScan}
             disabled={scanning}
@@ -56,6 +70,20 @@ export function DeviceManagementScreen() {
           >
             <RefreshCw className={`w-5 h-5 ${scanning ? 'animate-spin' : ''}`} />
             {scanning ? 'Scanning...' : 'Scan Network'}
+          </button>
+
+          {brokerStatus && (
+            <div className="ml-4">
+              <span className={`px-3 py-1 rounded-full text-sm ${brokerStatus === 'connected' ? 'bg-green-600/20 text-green-400' : brokerStatus === 'connecting' ? 'bg-yellow-600/20 text-yellow-300' : 'bg-red-600/20 text-red-400'}`}>
+                {brokerStatus.toUpperCase()}
+              </span>
+              {brokerUrl && <div className="text-xs text-gray-400 mt-1">{brokerUrl}</div>}
+              {brokerError && <div className="text-xs text-red-400 mt-1">{brokerError}</div>}
+            </div>
+          )}
+
+          <button onClick={handleDisconnect} className="ml-auto flex items-center gap-2 bg-gray-800 hover:bg-gray-700 px-4 py-2 rounded-lg transition-colors">
+            Disconnect
           </button>
 
           <button className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 px-6 py-3 rounded-lg transition-colors">
@@ -174,19 +202,22 @@ export function DeviceManagementScreen() {
           <h2 className="text-xl font-semibold mb-4">MQTT Broker Configuration</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
-              <label className="block text-sm font-medium mb-2">Broker Address</label>
-              <input
-                type="text"
-                defaultValue="mqtt://192.168.1.1:1883"
-                className="w-full bg-gray-950 border border-gray-800 rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500"
-              />
+                <label className="block text-sm font-medium mb-2">Broker Address</label>
+                <input
+                  type="text"
+                  value={broker}
+                  onChange={(e) => setBroker(e.target.value)}
+                  placeholder="ws://broker:8083 or mqtt://..."
+                  className="w-full bg-gray-950 border border-gray-800 rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500"
+                />
             </div>
 
             <div>
               <label className="block text-sm font-medium mb-2">Port</label>
               <input
                 type="number"
-                defaultValue="1883"
+                value={port}
+                onChange={(e) => setPort(parseInt(e.target.value || '0'))}
                 className="w-full bg-gray-950 border border-gray-800 rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500"
               />
             </div>
@@ -195,6 +226,8 @@ export function DeviceManagementScreen() {
               <label className="block text-sm font-medium mb-2">Username (Optional)</label>
               <input
                 type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
                 placeholder="mqtt_user"
                 className="w-full bg-gray-950 border border-gray-800 rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500"
               />
@@ -204,7 +237,8 @@ export function DeviceManagementScreen() {
               <label className="block text-sm font-medium mb-2">Discovery Timeout (ms)</label>
               <input
                 type="number"
-                defaultValue="5000"
+                value={discoveryTimeout}
+                onChange={(e) => setDiscoveryTimeout(parseInt(e.target.value || '0'))}
                 className="w-full bg-gray-950 border border-gray-800 rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500"
               />
             </div>

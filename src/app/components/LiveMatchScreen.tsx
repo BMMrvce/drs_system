@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -16,15 +16,22 @@ import {
   Bell
 } from 'lucide-react';
 import { Device, Camera as CameraType, SensorEvent, SystemStatus } from '../types';
-import { mockDevices, mockCameras, mockEvents } from '../mockData';
+import { useApp } from '../context/AppContext';
+import CircularRecorder from '../services/recorder';
 
 export function LiveMatchScreen() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const [recording, setRecording] = useState(true);
-  const [devices] = useState<Device[]>(mockDevices);
-  const [cameras] = useState<CameraType[]>(mockCameras);
-  const [events, setEvents] = useState<SensorEvent[]>(mockEvents);
+  const [recording, setRecording] = useState(false);
+  const { devices, cameras, events, startDiscovery, stopDiscovery } = useApp();
+  const [localEvents, setLocalEvents] = useState<SensorEvent[]>(events);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const recorderRef = useRef<CircularRecorder | null>(null);
+  const [clips, setClips] = useState<Record<string, string>>({});
+  const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
+  const [cameraError, setCameraError] = useState<string | null>(null);
   const [duration, setDuration] = useState(0);
   const [systemStatus] = useState<SystemStatus>({
     recording: true,
@@ -42,6 +49,109 @@ export function LiveMatchScreen() {
 
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    setLocalEvents(events);
+  }, [events]);
+
+  useEffect(() => {
+    let mounted = true;
+    async function startCamera(deviceId?: string | null) {
+      try {
+        const constraints: MediaStreamConstraints = { video: { width: 1280, height: 720, frameRate: 60 }, audio: false };
+        if (deviceId) {
+          // @ts-ignore
+          constraints.video = { deviceId: { exact: deviceId }, width: 1280, height: 720, frameRate: 60 };
+        }
+        const s = await navigator.mediaDevices.getUserMedia(constraints);
+        if (!mounted) return;
+        streamRef.current = s;
+        if (videoRef.current) videoRef.current.srcObject = s;
+        setRecording(true);
+        setCameraError(null);
+        // update device list
+        try {
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          setVideoDevices(devices.filter(d => d.kind === 'videoinput'));
+          if (!selectedDeviceId) {
+            const preferred = devices.find(d => d.kind === 'videoinput');
+            if (preferred) setSelectedDeviceId(preferred.deviceId);
+          }
+        } catch {}
+        try {
+          recorderRef.current = new CircularRecorder(60, 1000);
+          recorderRef.current.start(s, 'video/webm;codecs=vp9');
+        } catch (e) {
+          console.warn('Recorder start failed', e);
+        }
+      } catch (err) {
+        console.warn('Camera not available', err);
+        setCameraError(String(err));
+      }
+    }
+    startCamera(selectedDeviceId || null);
+    return () => {
+      mounted = false;
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t => t.stop());
+      }
+      try {
+        recorderRef.current?.stop();
+      } catch {}
+    };
+  }, []);
+
+  useEffect(() => {
+    // re-start camera when selected device changes
+    if (!selectedDeviceId) return;
+    let mounted = true;
+    async function switchCamera() {
+      try {
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach(t => t.stop());
+        }
+        const s = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: selectedDeviceId }, width: 1280, height: 720, frameRate: 60 }, audio: false });
+        if (!mounted) return;
+        streamRef.current = s;
+        if (videoRef.current) videoRef.current.srcObject = s;
+        setCameraError(null);
+        try { recorderRef.current?.stop(); } catch {}
+        try {
+          recorderRef.current = new CircularRecorder(60, 1000);
+          recorderRef.current.start(s, 'video/webm;codecs=vp9');
+        } catch (e) { console.warn('Recorder start failed', e); }
+      } catch (err) {
+        setCameraError(String(err));
+      }
+    }
+    switchCamera();
+    return () => { mounted = false; };
+  }, [selectedDeviceId]);
+
+  // When new events arrive, attempt to create a short replay clip for each
+  useEffect(() => {
+    let cancelled = false;
+    async function buildClips() {
+      if (!recorderRef.current) return;
+      for (const ev of events) {
+        if (cancelled) return;
+        if (clips[ev.id]) continue;
+        try {
+          const secondsBefore = ev.replayOffset || 2;
+          const duration = 6; // seconds
+          const blob = await recorderRef.current.getClip(secondsBefore, duration);
+          if (blob) {
+            const url = URL.createObjectURL(blob);
+            setClips(prev => ({ ...prev, [ev.id]: url }));
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
+    }
+    buildClips();
+    return () => { cancelled = true; };
+  }, [events]);
 
   const formatDuration = (seconds: number) => {
     const hours = Math.floor(seconds / 3600);
@@ -196,6 +306,26 @@ export function LiveMatchScreen() {
                 Camera Status
               </h2>
               <div className="space-y-3">
+                <div className="bg-gray-950 rounded-lg p-2">
+                      <video ref={videoRef} autoPlay playsInline muted className="w-full rounded" />
+                </div>
+                    <div className="mt-3 flex items-center gap-3">
+                      <label className="text-sm text-gray-400">Camera:</label>
+                      <select
+                        value={selectedDeviceId || ''}
+                        onChange={(e) => setSelectedDeviceId(e.target.value || null)}
+                        className="bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm"
+                      >
+                        <option value="">Default</option>
+                        {videoDevices.map(d => (
+                          <option key={d.deviceId} value={d.deviceId}>{d.label || d.deviceId}</option>
+                        ))}
+                      </select>
+                      {cameraError && <div className="text-sm text-red-400">{cameraError}</div>}
+                    </div>
+                {cameras.length === 0 && (
+                  <div className="text-sm text-gray-400">No external cameras discovered — using local camera.</div>
+                )}
                 {cameras.map(camera => (
                   <div key={camera.id} className="flex justify-between items-center p-3 bg-gray-950 rounded-lg">
                     <div>
@@ -261,7 +391,7 @@ export function LiveMatchScreen() {
                 Recent Events
               </h2>
               <div className="space-y-3">
-                {events.map(event => (
+                {localEvents.map(event => (
                   <div key={event.id} className="p-3 bg-gray-950 rounded-lg border-l-4 border-blue-500">
                     <div className="flex items-start gap-3">
                       <span className="text-2xl">{getEventIcon(event.eventType)}</span>
@@ -278,6 +408,14 @@ export function LiveMatchScreen() {
                         <div className="text-xs text-gray-400 mt-1">
                           Confidence: {(event.confidence * 100).toFixed(0)}%
                         </div>
+                        {clips[event.id] ? (
+                          <div className="mt-2">
+                            <video src={clips[event.id]} controls className="w-full rounded bg-black" />
+                            <a href={clips[event.id]} download={`${event.id}.webm`} className="text-sm text-blue-400 mt-1 inline-block">Download clip</a>
+                          </div>
+                        ) : (
+                          <div className="text-xs text-gray-500 mt-2">Preparing clip...</div>
+                        )}
                       </div>
                     </div>
                   </div>

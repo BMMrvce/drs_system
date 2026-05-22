@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -18,6 +18,7 @@ import {
   Zap
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import CircularRecorder from '../services/recorder';
 import { useRealtimeEvents } from '../hooks/useRealtimeEvents';
 import { SensorEvent } from '../types/index';
 import { NotificationToast, useToast } from '../components/NotificationToast';
@@ -35,6 +36,15 @@ export function LiveMatchScreen() {
   const [recording, setRecording] = useState(true);
   const [localEvents, setLocalEvents] = useState<SensorEvent[]>(matchEvents);
   const { toasts, dismissToast, showEvent } = useToast();
+
+  // Camera local state
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const recorderRef = useRef<CircularRecorder | null>(null);
+  const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+
 
   // Sync local events with context events
   useEffect(() => {
@@ -57,6 +67,71 @@ export function LiveMatchScreen() {
     isLive: recording,
     onEvent: handleNewEvent
   });
+
+  // Camera helpers: request permission, enumerate devices, start/stop stream
+  async function enumerateVideoDevices() {
+    try {
+      const list = await navigator.mediaDevices.enumerateDevices();
+      setVideoDevices(list.filter(d => d.kind === 'videoinput'));
+    } catch (e) {
+      console.warn('enumerateDevices failed', e);
+    }
+  }
+
+  async function startCamera(deviceId?: string | null) {
+    try {
+      // Ask for permission with a minimal getUserMedia call first to ensure labels appear
+      const baseConstraints: MediaStreamConstraints = { video: { width: 1280, height: 720 }, audio: false };
+      const constraints = deviceId ? { video: { deviceId: { exact: deviceId }, width: 1280, height: 720 }, audio: false } : baseConstraints;
+      const s = await navigator.mediaDevices.getUserMedia(constraints);
+      streamRef.current = s;
+      if (videoRef.current) {
+        videoRef.current.srcObject = s;
+        // Some browsers require play() after attaching srcObject
+        try { await videoRef.current.play(); } catch (e) { /* ignore */ }
+      }
+      setCameraError(null);
+      // Start/replace circular recorder
+      try { recorderRef.current?.stop(); } catch {}
+      try {
+        recorderRef.current = new CircularRecorder(60, 1000);
+        recorderRef.current.start(s, 'video/webm;codecs=vp9');
+      } catch (e) {
+        console.warn('Recorder start failed', e);
+      }
+
+      // Refresh device list (labels available after permission)
+      await enumerateVideoDevices();
+      if (!selectedDeviceId) {
+        const preferred = videoDevices[0] || null;
+        if (preferred) setSelectedDeviceId(preferred.deviceId);
+      }
+    } catch (err: any) {
+      console.warn('Camera start failed', err);
+      setCameraError(err?.message || String(err));
+    }
+  }
+
+  useEffect(() => {
+    // enumerate devices on mount
+    enumerateVideoDevices();
+    // Listen for device changes (plug/unplug)
+    const handler = () => enumerateVideoDevices();
+    navigator.mediaDevices?.addEventListener?.('devicechange', handler);
+    return () => {
+      navigator.mediaDevices?.removeEventListener?.('devicechange', handler);
+    };
+  }, []);
+
+  // start camera when user picks a device (or when selectedDeviceId becomes set)
+  useEffect(() => {
+    if (selectedDeviceId === null) return;
+    startCamera(selectedDeviceId);
+    return () => {
+      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+      try { recorderRef.current?.stop(); } catch {}
+    };
+  }, [selectedDeviceId]);
 
   useEffect(() => {
     if (!match) {
@@ -283,6 +358,35 @@ export function LiveMatchScreen() {
                 Camera Monitoring
               </h2>
               <div className="space-y-3">
+                <div className="bg-gray-950 rounded-lg p-2">
+                  <video ref={videoRef} autoPlay playsInline muted className="w-full rounded bg-black" />
+                </div>
+
+                <div className="mt-3 flex items-center gap-3">
+                  <label className="text-sm text-gray-400">Camera:</label>
+                  <select
+                    value={selectedDeviceId || ''}
+                    onChange={(e) => setSelectedDeviceId(e.target.value || null)}
+                    className="bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm"
+                  >
+                    <option value="">Default</option>
+                    {videoDevices.map(d => (
+                      <option key={d.deviceId} value={d.deviceId}>{d.label || d.deviceId}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => startCamera(selectedDeviceId || null)}
+                    className="px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm"
+                  >
+                    Start Camera
+                  </button>
+                  {cameraError && <div className="text-sm text-red-400">{cameraError}</div>}
+                </div>
+
+                {cameras.length === 0 && (
+                  <div className="text-sm text-gray-400">No external cameras discovered — using local camera.</div>
+                )}
+
                 {cameras.map(camera => (
                   <div
                     key={camera.id}

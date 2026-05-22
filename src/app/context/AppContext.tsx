@@ -1,6 +1,7 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, ReactNode, useRef } from 'react';
 import { Match, Device, Camera, SensorEvent, AppSettings, SystemStatus } from '../types/index';
-import { mockMatches, mockDevices, mockCameras, mockEvents, defaultSettings } from '../data/mockData';
+import { defaultSettings } from '../data/mockData';
+import { connectToBroker, disconnectBroker } from '../services/mqttClient';
 
 interface AppContextType {
   matches: Match[];
@@ -9,6 +10,9 @@ interface AppContextType {
   events: SensorEvent[];
   settings: AppSettings;
   systemStatus: SystemStatus;
+  brokerStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
+  brokerUrl?: string;
+  brokerError?: string | null;
   addMatch: (match: Match) => void;
   updateMatch: (id: string, updates: Partial<Match>) => void;
   deleteMatch: (id: string) => void;
@@ -17,16 +21,30 @@ interface AppContextType {
   updateSystemStatus: (updates: Partial<SystemStatus>) => void;
   getMatchById: (id: string) => Match | undefined;
   getEventsByMatchId: (matchId: string) => SensorEvent[];
+  startDiscovery: (brokerUrl?: string, opts?: any) => void;
+  stopDiscovery: () => void;
+  updateDevices: (devices: Device[]) => void;
+  updateCameras: (cameras: Camera[]) => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [matches, setMatches] = useState<Match[]>(mockMatches);
-  const [devices, setDevices] = useState<Device[]>(mockDevices);
-  const [cameras, setCameras] = useState<Camera[]>(mockCameras);
-  const [events, setEvents] = useState<SensorEvent[]>(mockEvents);
-  const [settings, setSettings] = useState<AppSettings>(defaultSettings);
+  const [matches, setMatches] = useState<Match[]>(() => {
+    try { return JSON.parse(localStorage.getItem('matches') || '[]'); } catch { return []; }
+  });
+  const [devices, setDevices] = useState<Device[]>(() => {
+    try { return JSON.parse(localStorage.getItem('devices') || '[]'); } catch { return []; }
+  });
+  const [cameras, setCameras] = useState<Camera[]>(() => {
+    try { return JSON.parse(localStorage.getItem('cameras') || '[]'); } catch { return []; }
+  });
+  const [events, setEvents] = useState<SensorEvent[]>(() => {
+    try { return JSON.parse(localStorage.getItem('events') || '[]'); } catch { return []; }
+  });
+  const [settings, setSettings] = useState<AppSettings>(() => {
+    try { return JSON.parse(localStorage.getItem('settings') || JSON.stringify(defaultSettings)); } catch { return defaultSettings; }
+  });
   const [systemStatus, setSystemStatus] = useState<SystemStatus>({
     recording: false,
     storageUsed: 145,
@@ -38,6 +56,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     fps: 120,
     droppedFrames: 3
   });
+  const mqttRef = useRef<any>(null);
+  const [brokerStatus, setBrokerStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
+  const [brokerUrlState, setBrokerUrlState] = useState<string | undefined>(undefined);
+  const [brokerError, setBrokerError] = useState<string | null>(null);
 
   const addMatch = (match: Match) => {
     setMatches(prev => [match, ...prev]);
@@ -53,6 +75,88 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const addEvent = (event: SensorEvent) => {
     setEvents(prev => [event, ...prev]);
+  };
+
+  const updateDevices = (next: Device[]) => {
+    setDevices(next);
+  };
+
+  const updateCameras = (next: Camera[]) => {
+    setCameras(next);
+  };
+
+  const startDiscovery = (brokerUrl?: string, opts?: any) => {
+    const url = brokerUrl || settings.mqtt?.brokerUrl;
+    if (!url) {
+      console.warn('No MQTT broker URL provided for discovery');
+      return;
+    }
+    setBrokerStatus('connecting');
+    setBrokerUrlState(url);
+    setBrokerError(null);
+    try {
+      mqttRef.current = connectToBroker(url, opts || {}, {
+        onDevice: (device: any) => {
+          // normalize device payload to Device type as best-effort
+          const normalized: Device = {
+            id: device.id || device.deviceId || `${device.type || 'dev'}-${Date.now()}`,
+            name: device.name || device.id || 'Unknown Device',
+            type: device.type || 'sensor',
+            ipAddress: device.ipAddress || device.ip || '',
+            mqttTopic: device.mqttTopic || device.topic || '',
+            online: device.online !== undefined ? !!device.online : true,
+            firmwareVersion: device.firmwareVersion || device.fw || '',
+            batteryLevel: device.batteryLevel,
+            signalStrength: device.signalStrength,
+            lastHeartbeat: device.lastHeartbeat ? new Date(device.lastHeartbeat) : new Date(),
+            capabilities: device.capabilities || []
+          } as Device;
+          setDevices(prev => {
+            const exists = prev.find(d => d.id === normalized.id);
+            if (exists) return prev.map(d => d.id === normalized.id ? { ...d, ...normalized } : d);
+            return [normalized, ...prev];
+          });
+        },
+        onEvent: (evt: any) => {
+          setEvents(prev => [{
+            id: evt.id || `evt-${Date.now()}`,
+            matchId: evt.matchId || '',
+            timestamp: evt.timestamp || Date.now(),
+            eventType: evt.eventType || 'unknown',
+            sensorId: evt.sensorId || 'unknown',
+            confidence: evt.confidence || 1,
+            replayOffset: evt.replayOffset || 0,
+            metadata: evt.metadata || {}
+          }, ...prev]);
+        },
+        onConnect: () => {
+          setBrokerStatus('connected');
+        },
+        onError: (err: Error) => {
+          setBrokerStatus('error');
+          setBrokerError(err?.message || String(err));
+        },
+        onClose: () => {
+          setBrokerStatus('disconnected');
+        },
+        onOffline: () => {
+          setBrokerStatus('disconnected');
+        },
+        onReconnect: () => {
+          setBrokerStatus('connecting');
+        }
+      });
+    } catch (e) {
+      console.error('Discovery failed', e);
+      setBrokerStatus('error');
+      setBrokerError(String(e));
+    }
+  };
+
+  const stopDiscovery = () => {
+    disconnectBroker();
+    mqttRef.current = null;
+    setBrokerStatus('disconnected');
   };
 
   const updateSettings = (updates: Partial<AppSettings>) => {
@@ -80,6 +184,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         events,
         settings,
         systemStatus,
+        brokerStatus,
+        brokerUrl: brokerUrlState,
+        brokerError,
         addMatch,
         updateMatch,
         deleteMatch,
@@ -88,6 +195,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         updateSystemStatus,
         getMatchById,
         getEventsByMatchId
+        ,
+        startDiscovery,
+        stopDiscovery,
+        updateDevices,
+        updateCameras
       }}
     >
       {children}

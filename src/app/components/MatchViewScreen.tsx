@@ -13,7 +13,7 @@ import {
   Gauge
 } from 'lucide-react';
 import { SensorEvent } from '../types';
-import { mockEvents } from '../mockData';
+import { useApp } from '../context/AppContext';
 
 export function MatchViewScreen() {
   const { id } = useParams();
@@ -21,7 +21,7 @@ export function MatchViewScreen() {
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
-  const [events] = useState<SensorEvent[]>(mockEvents);
+  const { events } = useApp();
   const [selectedEvent, setSelectedEvent] = useState<SensorEvent | null>(null);
   const videoRef = useRef<HTMLDivElement>(null);
 
