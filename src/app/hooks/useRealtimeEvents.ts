@@ -4,20 +4,13 @@ import { SensorEvent, EventType } from '../types/index';
 interface UseRealtimeEventsProps {
   matchId: string;
   isLive: boolean;
+  sensorIds?: string[];
   onEvent: (event: SensorEvent) => void;
 }
 
 const eventTypes: EventType[] = ['wicket', 'bail_dislodged', 'stump_motion', 'motion_alert'];
 
-const sensorIds = [
-  'stump-left-001',
-  'stump-middle-001',
-  'stump-right-001',
-  'bail-primary-001',
-  'bail-secondary-001'
-];
-
-export function useRealtimeEvents({ matchId, isLive, onEvent }: UseRealtimeEventsProps) {
+export function useRealtimeEvents({ matchId, isLive, sensorIds = [], onEvent }: UseRealtimeEventsProps) {
   const intervalRef = useRef<NodeJS.Timeout>();
 
   useEffect(() => {
@@ -33,7 +26,9 @@ export function useRealtimeEvents({ matchId, isLive, onEvent }: UseRealtimeEvent
       // 30% chance of generating an event each interval
       if (Math.random() > 0.7) {
         const eventType = eventTypes[Math.floor(Math.random() * eventTypes.length)];
-        const sensorId = sensorIds[Math.floor(Math.random() * sensorIds.length)];
+        const sensorId = sensorIds.length > 0
+          ? sensorIds[Math.floor(Math.random() * sensorIds.length)]
+          : `${matchId}-mqtt`;
 
         const newEvent: SensorEvent = {
           id: `evt-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,

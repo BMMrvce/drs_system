@@ -1,6 +1,7 @@
 // Simple circular MediaRecorder buffer to keep recent video in memory
 export class CircularRecorder {
   chunks: Array<{ ts: number; blob: Blob }> = [];
+  recordedChunks: Blob[] = [];
   mediaRecorder: MediaRecorder | null = null;
   timeslice = 1000; // ms per chunk
   bufferDuration = 60; // seconds of buffer
@@ -22,6 +23,7 @@ export class CircularRecorder {
 
     this.mediaRecorder.ondataavailable = (ev) => {
       if (ev.data && ev.data.size > 0) {
+        this.recordedChunks.push(ev.data);
         this.chunks.push({ ts: Date.now(), blob: ev.data });
         this.trimBuffer();
       }
@@ -66,6 +68,14 @@ export class CircularRecorder {
 
     if (parts.length === 0) return null;
     return new Blob(parts, { type: parts[0].type });
+  }
+
+  getRecording(): Blob | null {
+    if (this.recordedChunks.length === 0) {
+      return null;
+    }
+
+    return new Blob(this.recordedChunks, { type: this.recordedChunks[0].type });
   }
 }
 

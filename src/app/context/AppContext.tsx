@@ -2,12 +2,14 @@ import { createContext, useContext, useState, useEffect, ReactNode, useRef } fro
 import { Match, Device, Camera, SensorEvent, AppSettings, SystemStatus } from '../types/index';
 import { defaultSettings } from '../data/mockData';
 import { connectToBroker, disconnectBroker } from '../services/mqttClient';
+import { fetchDevices, syncDevices } from '../services/backendApi';
 
 interface AppContextType {
   matches: Match[];
   devices: Device[];
   cameras: Camera[];
   events: SensorEvent[];
+  mqttMessages: Array<{ topic: string; payload: any; receivedAt: number }>;
   settings: AppSettings;
   systemStatus: SystemStatus;
   brokerStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -42,6 +44,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [events, setEvents] = useState<SensorEvent[]>(() => {
     try { return JSON.parse(localStorage.getItem('events') || '[]'); } catch { return []; }
   });
+  const [mqttMessages, setMqttMessages] = useState<Array<{ topic: string; payload: any; receivedAt: number }>>(() => {
+    try { return JSON.parse(localStorage.getItem('mqttMessages') || '[]'); } catch { return []; }
+  });
   const [settings, setSettings] = useState<AppSettings>(() => {
     try { return JSON.parse(localStorage.getItem('settings') || JSON.stringify(defaultSettings)); } catch { return defaultSettings; }
   });
@@ -60,6 +65,69 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [brokerStatus, setBrokerStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
   const [brokerUrlState, setBrokerUrlState] = useState<string | undefined>(undefined);
   const [brokerError, setBrokerError] = useState<string | null>(null);
+  const backendSyncReadyRef = useRef(false);
+
+  useEffect(() => {
+    localStorage.setItem('matches', JSON.stringify(matches));
+  }, [matches]);
+
+  useEffect(() => {
+    localStorage.setItem('devices', JSON.stringify(devices));
+  }, [devices]);
+
+  useEffect(() => {
+    localStorage.setItem('cameras', JSON.stringify(cameras));
+  }, [cameras]);
+
+  useEffect(() => {
+    localStorage.setItem('events', JSON.stringify(events));
+  }, [events]);
+
+  useEffect(() => {
+    localStorage.setItem('mqttMessages', JSON.stringify(mqttMessages));
+  }, [mqttMessages]);
+
+  useEffect(() => {
+    localStorage.setItem('settings', JSON.stringify(settings));
+  }, [settings]);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadDevicesFromBackend() {
+      try {
+        const remoteDevices = await fetchDevices();
+        if (!active) {
+          return;
+        }
+
+        if (remoteDevices.length > 0) {
+          setDevices(remoteDevices);
+        }
+
+        backendSyncReadyRef.current = true;
+      } catch (error) {
+        console.warn('Device sync backend unavailable, using local cache', error);
+        backendSyncReadyRef.current = false;
+      }
+    }
+
+    void loadDevicesFromBackend();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!backendSyncReadyRef.current) {
+      return;
+    }
+
+    void syncDevices(devices).catch((error) => {
+      console.warn('Failed to sync devices to backend', error);
+    });
+  }, [devices]);
 
   const addMatch = (match: Match) => {
     setMatches(prev => [match, ...prev]);
@@ -77,6 +145,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setEvents(prev => [event, ...prev]);
   };
 
+  const addMqttMessage = (topic: string, payload: any) => {
+    setMqttMessages(prev => [{ topic, payload, receivedAt: Date.now() }, ...prev].slice(0, 200));
+  };
+
   const updateDevices = (next: Device[]) => {
     setDevices(next);
   };
@@ -91,6 +163,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       console.warn('No MQTT broker URL provided for discovery');
       return;
     }
+    disconnectBroker();
     setBrokerStatus('connecting');
     setBrokerUrlState(url);
     setBrokerError(null);
@@ -128,6 +201,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
             replayOffset: evt.replayOffset || 0,
             metadata: evt.metadata || {}
           }, ...prev]);
+        },
+        onMessage: (topic: string, message: any) => {
+          addMqttMessage(topic, message);
         },
         onConnect: () => {
           setBrokerStatus('connected');
@@ -182,6 +258,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         devices,
         cameras,
         events,
+        mqttMessages,
         settings,
         systemStatus,
         brokerStatus,
@@ -194,8 +271,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         updateSettings,
         updateSystemStatus,
         getMatchById,
-        getEventsByMatchId
-        ,
+        getEventsByMatchId,
         startDiscovery,
         stopDiscovery,
         updateDevices,

@@ -6,6 +6,7 @@ import { LiveMatchScreen } from './screens/LiveMatchScreen';
 import { MatchViewScreen } from './screens/MatchViewScreen';
 import { DeviceManagementScreen } from './screens/DeviceManagementScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
+import { MqttDebugScreen } from './screens/MqttDebugScreen';
 import { Settings, Radio } from 'lucide-react';
 
 function Navigation() {
@@ -48,6 +49,7 @@ function AppContent() {
         <Route path="/match/:id" element={<MatchViewScreen />} />
         <Route path="/devices" element={<DeviceManagementScreen />} />
         <Route path="/settings" element={<SettingsScreen />} />
+        <Route path="/mqtt-debug" element={<MqttDebugScreen />} />
       </Routes>
     </div>
   );

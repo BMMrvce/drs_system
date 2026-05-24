@@ -5,6 +5,7 @@ let client: any = null;
 export function connectToBroker(brokerUrl: string, options: any, handlers: {
   onDevice?: (device: any) => void;
   onEvent?: (event: any) => void;
+  onMessage?: (topic: string, message: any) => void;
   onConnect?: () => void;
   onError?: (err: Error) => void;
   onClose?: () => void;
@@ -12,6 +13,14 @@ export function connectToBroker(brokerUrl: string, options: any, handlers: {
   onReconnect?: () => void;
 }) {
   if (!brokerUrl) throw new Error('brokerUrl required');
+  if (client) {
+    try {
+      client.end(true);
+    } catch {
+      // ignore stale client shutdown errors
+    }
+    client = null;
+  }
   client = mqtt.connect(brokerUrl, options);
 
   client.on('connect', () => {
@@ -36,12 +45,14 @@ export function connectToBroker(brokerUrl: string, options: any, handlers: {
   client.on('message', (topic, payload) => {
     try {
       const msg = JSON.parse(payload.toString());
+      handlers.onMessage && handlers.onMessage(topic, msg);
       if (topic === 'drs/discovery') {
         handlers.onDevice && handlers.onDevice(msg);
       } else if (topic.startsWith('drs/events')) {
         handlers.onEvent && handlers.onEvent(msg);
       }
     } catch (err) {
+      handlers.onMessage && handlers.onMessage(topic, payload.toString());
       // ignore non-json or malformed
     }
   });

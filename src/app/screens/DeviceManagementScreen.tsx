@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -12,21 +12,109 @@ import {
   RefreshCw,
   Router,
   CheckCircle,
-  XCircle
+  XCircle,
+  Save,
+  X
 } from 'lucide-react';
+import { Device, DeviceType } from '../types';
 import { useApp } from '../context/AppContext';
 
 export function DeviceManagementScreen() {
   const navigate = useNavigate();
-  const { devices, settings } = useApp();
+  const { devices, settings, updateDevices, updateSettings, startDiscovery, stopDiscovery, brokerStatus, brokerUrl, brokerError } = useApp();
   const [scanning, setScanning] = useState(false);
   const [mqttConfig, setMqttConfig] = useState(settings.mqtt);
+  const [showManualAdd, setShowManualAdd] = useState(false);
+  const [manualDevice, setManualDevice] = useState({
+    id: '',
+    name: '',
+    type: 'sensor' as DeviceType,
+    ipAddress: '',
+    mqttTopic: '',
+    firmwareVersion: '1.0.0',
+    online: true,
+    batteryLevel: '',
+    signalStrength: ''
+  });
+
+  useEffect(() => {
+    setMqttConfig(settings.mqtt);
+  }, [settings.mqtt]);
+
+  useEffect(() => {
+    if (scanning && (brokerStatus === 'connected' || brokerStatus === 'error' || brokerStatus === 'disconnected')) {
+      setScanning(false);
+    }
+  }, [scanning, brokerStatus]);
+
+  const getDiscoveryUrl = () => {
+    const configuredUrl = mqttConfig.brokerUrl.trim();
+    if (configuredUrl) {
+      return configuredUrl.includes('://') ? configuredUrl : `mqtt://${configuredUrl}`;
+    }
+
+    return `mqtt://localhost:${mqttConfig.port}`;
+  };
 
   const handleScan = () => {
     setScanning(true);
-    setTimeout(() => {
+    try {
+      startDiscovery(getDiscoveryUrl(), {
+        username: mqttConfig.username || undefined,
+        password: mqttConfig.password || undefined,
+        port: mqttConfig.port
+      });
+    } catch (e) {
+      console.error(e);
       setScanning(false);
-    }, 2500);
+    }
+  };
+
+  const handleDisconnect = () => {
+    stopDiscovery();
+  };
+
+  const handleSaveConfiguration = () => {
+    updateSettings({ mqtt: mqttConfig });
+  };
+
+  const handleAddManualDevice = () => {
+    if (!manualDevice.name.trim() || !manualDevice.ipAddress.trim() || !manualDevice.mqttTopic.trim()) {
+      window.alert('Device name, IP address, and MQTT topic are required.');
+      return;
+    }
+
+    const nextDevice: Device = {
+      id: manualDevice.id.trim() || `${manualDevice.type}-${Date.now()}`,
+      name: manualDevice.name.trim(),
+      type: manualDevice.type,
+      ipAddress: manualDevice.ipAddress.trim(),
+      mqttTopic: manualDevice.mqttTopic.trim(),
+      online: manualDevice.online,
+      firmwareVersion: manualDevice.firmwareVersion.trim() || '1.0.0',
+      batteryLevel: manualDevice.batteryLevel === '' ? undefined : Number(manualDevice.batteryLevel),
+      signalStrength: manualDevice.signalStrength === '' ? undefined : Number(manualDevice.signalStrength),
+      lastHeartbeat: new Date(),
+      capabilities: []
+    };
+
+    updateDevices([
+      nextDevice,
+      ...devices.filter(device => device.id !== nextDevice.id)
+    ]);
+
+    setManualDevice({
+      id: '',
+      name: '',
+      type: 'sensor',
+      ipAddress: '',
+      mqttTopic: '',
+      firmwareVersion: '1.0.0',
+      online: true,
+      batteryLevel: '',
+      signalStrength: ''
+    });
+    setShowManualAdd(false);
   };
 
   const getDeviceIcon = (type: string) => {
@@ -105,7 +193,7 @@ export function DeviceManagementScreen() {
         </div>
 
         {/* Actions Bar */}
-        <div className="flex gap-4 mb-8">
+        <div className="flex gap-4 mb-8 items-center flex-wrap">
           <button
             onClick={handleScan}
             disabled={scanning}
@@ -115,11 +203,151 @@ export function DeviceManagementScreen() {
             {scanning ? 'Scanning Network...' : 'Scan Network'}
           </button>
 
-          <button className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 px-6 py-3 rounded-lg transition-colors font-medium">
+          <button
+            onClick={() => setShowManualAdd(prev => !prev)}
+            className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 px-6 py-3 rounded-lg transition-colors font-medium"
+          >
             <Plus className="w-5 h-5" />
-            Add Device Manually
+            {showManualAdd ? 'Close Manual Add' : 'Add Device Manually'}
+          </button>
+
+          <button
+            onClick={handleDisconnect}
+            className="ml-auto flex items-center gap-2 bg-gray-800 hover:bg-gray-700 px-4 py-3 rounded-lg transition-colors font-medium"
+          >
+            Disconnect
           </button>
         </div>
+
+        {showManualAdd && (
+          <div className="mb-8 bg-gray-900 border border-gray-800 rounded-xl p-6">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-xl font-semibold">Add Device Manually</h2>
+              <button
+                onClick={() => setShowManualAdd(false)}
+                className="p-2 hover:bg-gray-800 rounded-lg transition-colors"
+                aria-label="Close manual add form"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium mb-2">Device ID</label>
+                <input
+                  type="text"
+                  value={manualDevice.id}
+                  onChange={(e) => setManualDevice({ ...manualDevice, id: e.target.value })}
+                  placeholder="sensor-01"
+                  className="w-full bg-gray-950 border border-gray-800 rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">Name</label>
+                <input
+                  type="text"
+                  value={manualDevice.name}
+                  onChange={(e) => setManualDevice({ ...manualDevice, name: e.target.value })}
+                  placeholder="Front Pitch Sensor"
+                  className="w-full bg-gray-950 border border-gray-800 rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">Type</label>
+                <select
+                  value={manualDevice.type}
+                  onChange={(e) => setManualDevice({ ...manualDevice, type: e.target.value as DeviceType })}
+                  className="w-full bg-gray-950 border border-gray-800 rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500"
+                >
+                  <option value="sensor">Sensor</option>
+                  <option value="stump">Smart Stump</option>
+                  <option value="bail">Bail Sensor</option>
+                  <option value="camera">Camera</option>
+                  <option value="led">LED Controller</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">IP Address</label>
+                <input
+                  type="text"
+                  value={manualDevice.ipAddress}
+                  onChange={(e) => setManualDevice({ ...manualDevice, ipAddress: e.target.value })}
+                  placeholder="192.168.1.50"
+                  className="w-full bg-gray-950 border border-gray-800 rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">MQTT Topic</label>
+                <input
+                  type="text"
+                  value={manualDevice.mqttTopic}
+                  onChange={(e) => setManualDevice({ ...manualDevice, mqttTopic: e.target.value })}
+                  placeholder="drs/devices/sensor-01"
+                  className="w-full bg-gray-950 border border-gray-800 rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">Firmware Version</label>
+                <input
+                  type="text"
+                  value={manualDevice.firmwareVersion}
+                  onChange={(e) => setManualDevice({ ...manualDevice, firmwareVersion: e.target.value })}
+                  placeholder="1.0.0"
+                  className="w-full bg-gray-950 border border-gray-800 rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">Battery Level</label>
+                <input
+                  type="number"
+                  value={manualDevice.batteryLevel}
+                  onChange={(e) => setManualDevice({ ...manualDevice, batteryLevel: e.target.value })}
+                  placeholder="85"
+                  className="w-full bg-gray-950 border border-gray-800 rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2">Signal Strength</label>
+                <input
+                  type="number"
+                  value={manualDevice.signalStrength}
+                  onChange={(e) => setManualDevice({ ...manualDevice, signalStrength: e.target.value })}
+                  placeholder="72"
+                  className="w-full bg-gray-950 border border-gray-800 rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div className="flex items-center gap-3 md:col-span-2">
+                <input
+                  id="manual-device-online"
+                  type="checkbox"
+                  checked={manualDevice.online}
+                  onChange={(e) => setManualDevice({ ...manualDevice, online: e.target.checked })}
+                  className="h-4 w-4 rounded border-gray-700 bg-gray-950"
+                />
+                <label htmlFor="manual-device-online" className="text-sm text-gray-300">
+                  Mark device as online
+                </label>
+              </div>
+            </div>
+
+            <button
+              onClick={handleAddManualDevice}
+              className="mt-6 flex items-center gap-2 bg-green-600 hover:bg-green-700 px-6 py-3 rounded-lg transition-colors font-medium"
+            >
+              <Plus className="w-5 h-5" />
+              Add Device
+            </button>
+          </div>
+        )}
 
         {/* Device Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
@@ -297,7 +525,7 @@ export function DeviceManagementScreen() {
               <input
                 type="number"
                 value={mqttConfig.port}
-                onChange={(e) => setMqttConfig({ ...mqttConfig, port: parseInt(e.target.value) })}
+                onChange={(e) => setMqttConfig({ ...mqttConfig, port: parseInt(e.target.value || '0') })}
                 className="w-full bg-gray-950 border border-gray-800 rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500"
               />
             </div>
@@ -329,7 +557,7 @@ export function DeviceManagementScreen() {
               <input
                 type="number"
                 value={mqttConfig.discoveryTimeout}
-                onChange={(e) => setMqttConfig({ ...mqttConfig, discoveryTimeout: parseInt(e.target.value) })}
+                onChange={(e) => setMqttConfig({ ...mqttConfig, discoveryTimeout: parseInt(e.target.value || '0') })}
                 className="w-full bg-gray-950 border border-gray-800 rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500"
               />
             </div>
@@ -339,15 +567,31 @@ export function DeviceManagementScreen() {
               <input
                 type="number"
                 value={mqttConfig.retryInterval}
-                onChange={(e) => setMqttConfig({ ...mqttConfig, retryInterval: parseInt(e.target.value) })}
+                onChange={(e) => setMqttConfig({ ...mqttConfig, retryInterval: parseInt(e.target.value || '0') })}
                 className="w-full bg-gray-950 border border-gray-800 rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500"
               />
             </div>
           </div>
 
-          <button className="mt-6 bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg transition-colors font-medium">
-            Save Configuration
-          </button>
+          <div className="mt-6 flex items-center gap-4 flex-wrap">
+            <button
+              onClick={handleSaveConfiguration}
+              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg transition-colors font-medium"
+            >
+              <Save className="w-5 h-5" />
+              Save Configuration
+            </button>
+
+            <div className="text-sm text-gray-400">
+              Active broker: {brokerUrl || getDiscoveryUrl()}
+            </div>
+          </div>
+
+          {brokerError && (
+            <div className="mt-4 text-sm text-red-400">
+              {brokerError}
+            </div>
+          )}
         </div>
       </div>
     </div>

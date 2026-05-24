@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import CircularRecorder from '../services/recorder';
+import { uploadVideoBlob } from '../services/backendApi';
 import { useRealtimeEvents } from '../hooks/useRealtimeEvents';
 import { SensorEvent } from '../types/index';
 import { NotificationToast, useToast } from '../components/NotificationToast';
@@ -44,6 +45,7 @@ export function LiveMatchScreen() {
   const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [uploadStatus, setUploadStatus] = useState<string | null>(null);
 
 
   // Sync local events with context events
@@ -65,6 +67,7 @@ export function LiveMatchScreen() {
   useRealtimeEvents({
     matchId: id!,
     isLive: recording,
+    sensorIds: devices.map(device => device.id),
     onEvent: handleNewEvent
   });
 
@@ -199,11 +202,28 @@ export function LiveMatchScreen() {
     }
   };
 
-  const handleEndMatch = () => {
+  const handleEndMatch = async () => {
     if (confirm('Are you sure you want to end this match? Recording will stop.')) {
       setRecording(false);
+      const recordingBlob = recorderRef.current?.getRecording();
       updateMatch(id!, { status: 'completed', endTime: new Date() });
       updateSystemStatus({ recording: false });
+
+      if (recordingBlob) {
+        try {
+          setUploadStatus('Uploading match video to Cloudinary...');
+          await uploadVideoBlob({
+            blob: recordingBlob,
+            matchId: id!,
+            fileName: `${match.name || id}-recording.webm`
+          });
+          setUploadStatus('Match video saved to cloud storage');
+        } catch (error) {
+          console.error('Video upload failed', error);
+          setUploadStatus('Match video upload failed, recording kept locally');
+        }
+      }
+
       navigate('/');
     }
   };
@@ -230,10 +250,13 @@ export function LiveMatchScreen() {
             </h1>
             <p className="text-gray-400">{match.name}</p>
             <p className="text-gray-500 text-sm">{match.teamA} vs {match.teamB}</p>
+            {uploadStatus && (
+              <p className="text-xs text-gray-400 mt-2">{uploadStatus}</p>
+            )}
           </div>
 
           <button
-            onClick={handleEndMatch}
+            onClick={() => void handleEndMatch()}
             className="bg-red-600 hover:bg-red-700 px-6 py-3 rounded-lg transition-colors flex items-center gap-2 font-medium"
           >
             <Square className="w-5 h-5" />
