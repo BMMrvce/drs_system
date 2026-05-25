@@ -8,5 +8,10 @@ export async function connectDatabase() {
   }
 
   mongoose.set('strictQuery', true);
-  await mongoose.connect(mongoUri);
+  console.log(`Connecting to MongoDB: ${mongoUri.replace(/:\/\/([^:]+):([^@]+)@/, '://$1:***@')}`);
+
+  await mongoose.connect(mongoUri, {
+    serverSelectionTimeoutMS: 10000,
+    connectTimeoutMS: 10000
+  });
 }

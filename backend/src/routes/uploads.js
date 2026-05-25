@@ -6,6 +6,23 @@ import { VideoAsset } from '../models/VideoAsset.js';
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
+router.get('/video', async (req, res, next) => {
+  try {
+    const matchId = (req.query.matchId || '').toString();
+    const limit = Math.min(Number(req.query.limit || 20), 100);
+
+    const query = {};
+    if (matchId) {
+      query.matchId = matchId;
+    }
+
+    const assets = await VideoAsset.find(query).sort({ createdAt: -1 }).limit(limit).lean();
+    res.json({ assets });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post('/video', upload.single('video'), async (req, res, next) => {
   try {
     if (!req.file) {

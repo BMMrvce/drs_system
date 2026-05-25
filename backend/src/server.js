@@ -7,6 +7,7 @@ import { configureCloudinary } from './config/cloudinary.js';
 import authRoutes from './routes/auth.js';
 import deviceRoutes from './routes/devices.js';
 import uploadRoutes from './routes/uploads.js';
+import logRoutes from './routes/logs.js';
 
 dotenv.config();
 
@@ -25,6 +26,7 @@ app.get('/api/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/devices', deviceRoutes);
 app.use('/api/uploads', uploadRoutes);
+app.use('/api/logs', logRoutes);
 
 app.use((error, req, res, next) => {
   console.error(error);
